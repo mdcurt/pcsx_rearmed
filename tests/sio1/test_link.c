@@ -11,6 +11,9 @@
  *   test_link A|B <link name> <seed> <cycles> <line delay> [jitter seed]
  *       one console in this process, linked to the other one. With a
  *       jitter seed the process sleeps at random to shake host timing.
+ *   test_link left <link name>
+ *       what DSR and CTS read before the other console is there, while
+ *       it is (doing nothing with its port) and after it has left
  *
  * The link is correct if both linked processes print the lines the
  * reference prints, whatever the host timing was. See run_link_test.sh.
@@ -22,6 +25,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/wait.h>
 #include "../../libpcsxcore/sio1.h"
 #include "../../libpcsxcore/sio1_link.h"
 
@@ -575,6 +579,97 @@ static int run_side(int side, const char *name, uint32_t seed, uint64_t end)
 	return 0;
 }
 
+/* one side of the "left" test: joins, stops n times (or until the link
+ * is gone, if n is 0) and returns the time it got to */
+static int left_join(struct sio1_port *port, const char *name, int side,
+	int n, uint64_t *t, uint32_t *sr_linked)
+{
+	char err[200];
+	int i, tries = 0;
+
+	lnk = sio1_link_open(name, side, port, 0x1234, 0, err, sizeof(err));
+	if (lnk == NULL) {
+		fprintf(stderr, "%c: %s\n", 'A' + side, err);
+		return -1;
+	}
+	while (sio1_link_status(lnk) == SIO1_LS_WAITING) {
+		sio1_link_stop(lnk, *t);
+		if (sio1_link_status(lnk) != SIO1_LS_WAITING)
+			break;
+		*t += 100000;
+		usleep(1000);
+		if (++tries > 20000) {
+			fprintf(stderr, "%c: nobody came\n", 'A' + side);
+			return -1;
+		}
+	}
+	for (i = 0; sio1_link_status(lnk) == SIO1_LS_LINKED; i++) {
+		if (n != 0 && i == n)
+			break;
+		if (i == 1000000) {
+			fprintf(stderr, "%c: still linked\n", 'A' + side);
+			return -1;
+		}
+		*t = sio1_link_stop(lnk, *t);
+		if (i == 8 && sr_linked != NULL)
+			*sr_linked = sio1p_peek_stat(port);
+	}
+	return 0;
+}
+
+static int run_left(const char *name)
+{
+	const uint32_t mask = SIO1_SR_DSR | SIO1_SR_CTS;
+	uint32_t sr_alone, sr_linked = ~0u, sr_left;
+	struct sio1_port port;
+	struct sio1_event ev;
+	uint64_t t = 1000;
+	int status = -1;
+	pid_t pid;
+
+	sio1p_init(&port);
+	port.emit = lnk_emit;
+	pid = fork();
+	if (pid < 0)
+		return 2;
+	if (pid == 0) {
+		/* B: there for a while, with its port as a reset leaves it */
+		t = 5000000;
+		if (left_join(&port, name, 1, 64, &t, NULL) != 0)
+			_exit(1);
+		sio1_link_close(lnk);
+		_exit(0);
+	}
+
+	/* A: no cable, as the emulator sets a port up before it links */
+	memset(&ev, 0, sizeof(ev));
+	ev.type = SIO1_EV_LINES;
+	ev.cycle = t;
+	ev.lines = SIO1_LINES_OPEN;
+	sio1p_deliver(&port, &ev);
+	sio1p_advance(&port, t);
+	sr_alone = sio1p_peek_stat(&port);
+
+	if (left_join(&port, name, 0, 0, &t, &sr_linked) != 0) {
+		waitpid(pid, &status, 0);
+		return 2;
+	}
+	sio1p_advance(&port, t + 100000);
+	sr_left = sio1p_peek_stat(&port);
+	waitpid(pid, &status, 0);
+
+	printf("DSR and CTS (%03x): alone %03x, linked %03x, left alone %03x; %s\n",
+		mask, sr_alone & mask, sr_linked & mask, sr_left & mask,
+		sio1_link_message(lnk));
+	sio1_link_close(lnk);
+	if (status != 0 || (sr_alone & mask) != mask || (sr_linked & mask) != 0
+	    || (sr_left & mask) != mask) {
+		printf("FAILED\n");
+		return 1;
+	}
+	return 0;
+}
+
 int main(int argc, char *argv[])
 {
 	/* SIO1_TEST_TRACE=prefix writes everything hashed to prefix.A/.B */
@@ -590,6 +685,8 @@ int main(int argc, char *argv[])
 			trace[i] = fopen(name, "w");
 		}
 	}
+	if (argc == 3 && strcmp(argv[1], "left") == 0)
+		return run_left(argv[2]);
 	if (argc == 5 && strcmp(argv[1], "ref") == 0) {
 		line_delay = atoi(argv[4]);
 		return run_ref(atoi(argv[2]), strtoull(argv[3], NULL, 0));
@@ -604,7 +701,8 @@ int main(int argc, char *argv[])
 			strtoull(argv[4], NULL, 0));
 	}
 	fprintf(stderr, "usage: %s ref <seed> <cycles> <line delay>\n"
-		"       %s A|B <name> <seed> <cycles> <line delay> [jitter seed]\n",
-		argv[0], argv[0]);
+		"       %s A|B <name> <seed> <cycles> <line delay> [jitter seed]\n"
+		"       %s left <name>\n",
+		argv[0], argv[0], argv[0]);
 	return 1;
 }

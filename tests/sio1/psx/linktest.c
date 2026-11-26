@@ -11,6 +11,11 @@
  *   role 3 (loopback): as A, but expects its own bytes
  *   role 4: does not use the port, only times a delay loop 64 times (to
  *           tell what an emulator's savestates do to timing by themselves)
+ *   role 5 (alone): for a console with nothing in its port. Leaves what SR
+ *           reads before the port is set up, then sends one byte, which
+ *           has to leave although nobody takes it
+ * A and B find each other with a byte that A repeats until B answers it:
+ * with no cable DSR may well read as on, so it tells nothing.
  * The first half of the bytes is received by polling SR, the second half
  * by waiting for the SIO1 bit in I_STAT (the interrupt request, with the
  * cpu's interrupts off). For the first 64 bytes of each half the time from
@@ -38,7 +43,7 @@ typedef unsigned int u32;
 #define SR_TXRDY	0x0001
 #define SR_RXRDY	0x0002
 #define SR_ERRORS	0x0038
-#define SR_DSR		0x0080
+#define SR_TXEMPTY	0x0004
 #define CR_ON		0x0027	/* TXEN, DTR, RXEN, RTS */
 #define CR_ERRRST	0x0010
 #define CR_INTRST	0x0040
@@ -48,6 +53,9 @@ typedef unsigned int u32;
 #define NBYTES		1024
 #endif
 #define TRIES		4000000
+#define SYNC		0x16
+#define SYNC_TRIES	40000	/* many times a byte's way there and back */
+#define FIND_TRIES	(16 * TRIES)	/* for the other console to turn up */
 
 struct result {
 	u32 magic;
@@ -57,7 +65,7 @@ struct result {
 	u32 sum;	/* over the bytes received */
 	u32 wrong;	/* bytes that were not what was expected */
 	u32 errors;	/* SR error bits seen */
-	u32 pad;
+	u32 sr0;	/* role 5: SR bits 0-8 as found */
 	u16 rt_poll[64];
 	u16 rt_irq[64];
 };
@@ -69,14 +77,19 @@ static u32 pattern(u32 i)
 	return (i * 37 + 11) & 0xff;
 }
 
-static int wait_sr(u32 bit)
+static int wait_sr_for(u32 bit, u32 tries)
 {
 	u32 n;
 
-	for (n = 0; n < TRIES; n++)
+	for (n = 0; n < tries; n++)
 		if (SIO1_SR & bit)
 			return 0;
 	return -1;
+}
+
+static int wait_sr(u32 bit)
+{
+	return wait_sr_for(bit, TRIES);
 }
 
 static int wait_irq(void)
@@ -96,11 +109,31 @@ static void fail(u32 step)
 		;
 }
 
+/* A: until the other end is there, these go nowhere. One at a time: the
+ * next is not written before the last has left (the other end may hold it
+ * back with its RTS for a while) and had its time to be answered. */
+static void find_peer(u32 loopback)
+{
+	u32 n;
+
+	for (n = 0; n < FIND_TRIES / SYNC_TRIES; n++) {
+		SIO1_DR = SYNC;
+		if (wait_sr_for(SR_TXEMPTY, FIND_TRIES))
+			fail(2);
+		if (wait_sr_for(SR_RXRDY, SYNC_TRIES))
+			continue;
+		if (SIO1_DR == (loopback ? SYNC : SYNC ^ 0xff))
+			return;
+	}
+	fail(1);
+}
+
 static void sender(u32 loopback)
 {
 	u32 i, b, expect, sr;
 	u16 t0;
 
+	find_peer(loopback);
 	for (i = 0; i < NBYTES; i++) {
 		int irq = i >= NBYTES / 2;
 
@@ -141,6 +174,15 @@ static void echo(void)
 {
 	u32 i, b;
 
+	/* B: A's first byte that gets here */
+	if (wait_sr_for(SR_RXRDY, FIND_TRIES))
+		fail(1);
+	if (SIO1_DR != SYNC)
+		fail(1);
+	if (wait_sr(SR_TXRDY))
+		fail(6);
+	SIO1_DR = SYNC ^ 0xff;
+
 	for (i = 0; i < NBYTES; i++) {
 		if (wait_sr(SR_RXRDY))
 			fail(5);
@@ -174,6 +216,17 @@ static void timer_only(void)
 	}
 }
 
+static void alone(void)
+{
+	if (wait_sr(SR_TXRDY))
+		fail(2);
+	SIO1_DR = 0x55;
+	/* sent, to nobody */
+	if (wait_sr(SR_TXEMPTY))
+		fail(7);
+	res->count = 1;
+}
+
 void main(void)
 {
 	u32 role = REG32(0x80100200);
@@ -191,16 +244,15 @@ void main(void)
 		res->status = 1;
 		return;
 	}
+	res->sr0 = SIO1_SR & 0x01ff;
 	SIO1_CR = CR_INTRST;
 	SIO1_MR = 0x004e; /* 8 bits, no parity, 1 stop bit, x16 */
 	SIO1_BR = 0x0012; /* "115200" */
 	SIO1_CR = CR_ON;
 
-	/* the other end raises DTR when it has got this far */
-	if (wait_sr(SR_DSR))
-		fail(1);
-
-	if (role == 2)
+	if (role == 5)
+		alone();
+	else if (role == 2)
 		echo();
 	else
 		sender(role == 3);

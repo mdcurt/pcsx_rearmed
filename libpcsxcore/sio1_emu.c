@@ -259,8 +259,9 @@ int sio1SetLinkMode(enum sio1_link_mode mode, const char *name)
 		/* both consoles have to count time the same way */
 		u32 config = Config.cycle_multiplier;
 
+		/* no cable until the other console is there */
 		sio1.mode = SIO1_LINK_UNPLUGGED;
-		set_inputs(t, 0);
+		set_inputs(t, SIO1_LINES_OPEN);
 		sio1.link = sio1_link_open(name, mode == SIO1_LINK_CONSOLE_B,
 				&sio1.port, config, sio1.line_delay,
 				err, sizeof(err));
@@ -277,7 +278,7 @@ int sio1SetLinkMode(enum sio1_link_mode mode, const char *name)
 	else {
 		sio1.mode = mode;
 		set_inputs(t, mode == SIO1_LINK_LOOPBACK
-				? sio1.port.s.out_lines : 0);
+				? sio1.port.s.out_lines : SIO1_LINES_OPEN);
 	}
 	schedule(t + 1);
 	return ret;
@@ -342,14 +343,11 @@ int sio1Freeze(void *f, int Mode)
 	sio1.cycle = psxRegs.cycle;
 	if (memcmp(hdr.tag, save_tag, sizeof(hdr.tag)) == 0
 	    && hdr.size == sizeof(sio1.port.s) && hdr.active) {
-		int lines = sio1.mode == SIO1_LINK_LOOPBACK;
-
 		SaveFuncs.read(f, &sio1.port.s, sizeof(sio1.port.s));
 		sio1.time = hdr.time;
-		if (lines)
-			lines = sio1.port.s.out_lines;
+		/* the cable, if there was one, is not in the port anymore */
 		if (sio1.mode != SIO1_LINK_LOOPBACK)
-			set_inputs(sio1.time, lines);
+			set_inputs(sio1.time, SIO1_LINES_OPEN);
 	}
 	else {
 		/* a state without the port: as after a reset */

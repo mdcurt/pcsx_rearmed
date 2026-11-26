@@ -64,6 +64,12 @@ enum sio1_ev_type {
 #define SIO1_LINE_DTR		1	/* -> peer's DSR */
 #define SIO1_LINE_RTS		2	/* -> peer's CTS */
 #define SIO1_LINE_BRK		4	/* TX level inverted */
+/* What the inputs read with no cable in the port: DSR and CTS on. It is
+ * what this emulator has always reported for the port (SIO_STAT 0x01a5)
+ * and what Armored Core and others go by to tell that there is no cable;
+ * a cable with a console at its other end shows that console's DTR and
+ * RTS, which are off until it turns them on. */
+#define SIO1_LINES_OPEN		(SIO1_LINE_DTR | SIO1_LINE_RTS)
 
 /* What travels over the cable. Kept at 16 bytes, it is also the layout
  * used by the shared memory link and by trace files. */

@@ -43,6 +43,8 @@ psx/linktest.exe: psx/linktest.c psx/start.S psx/link.ld psx/mkexe.py
 
 check: test_model test_link
 	./test_model
+	@d=$$(mktemp -d); PCSX_SIO1_LINK_DIR=$$d ./test_link left check; \
+		r=$$?; rm -rf $$d; exit $$r
 	@for delay in 0 512; do for seed in $(SEEDS); do \
 		echo "link test: seed $$seed, line delay $$delay"; \
 		./run_link_test.sh $$seed $(CYCLES) 2 $$delay | grep "^run" || exit 1; \
@@ -54,6 +56,15 @@ check-emu: retro_host psx/linktest.exe
 		echo "two linked instances: timing $$timing, dynarec $$drc"; \
 		./run_emu_test.sh $(CORE) psx/linktest.exe $$timing $$drc || exit 1; \
 	done; done
+	@for timing in exact fast; do for drc in disabled enabled; do \
+		echo "console A started late: timing $$timing, dynarec $$drc"; \
+		LATE=0.3 ./run_emu_test.sh $(CORE) psx/linktest.exe $$timing $$drc \
+			|| exit 1; \
+	done; done
+	@for drc in disabled enabled; do \
+		echo "one instance, nothing connected: dynarec $$drc"; \
+		./run_alone_test.sh $(CORE) psx/linktest.exe $$drc || exit 1; \
+	done
 
 clean:
 	$(RM) test_model test_link retro_host psx/linktest.elf \

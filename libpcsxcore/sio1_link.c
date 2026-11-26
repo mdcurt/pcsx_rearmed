@@ -309,7 +309,7 @@ const char *sio1_link_message(const struct sio1_link *l)
 	return l->msg;
 }
 
-/* the cable is gone: the port sees its inputs drop and runs on alone */
+/* the cable is gone: the port sees open inputs and runs on alone */
 static void lost(struct sio1_link *l, uint64_t t, const char *why)
 {
 	struct sio1_event ev;
@@ -319,6 +319,7 @@ static void lost(struct sio1_link *l, uint64_t t, const char *why)
 	if (l->status == SIO1_LS_LINKED) {
 		memset(&ev, 0, sizeof(ev));
 		ev.type = SIO1_EV_LINES;
+		ev.lines = SIO1_LINES_OPEN;
 		ev.cycle = t > l->port->s.now ? t : l->port->s.now;
 		/* whatever was on its way is not coming */
 		l->port->s.rxq_r = l->port->s.rxq_w;

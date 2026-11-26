@@ -4,7 +4,7 @@
  * and prints the result block the test program leaves in RAM.
  *
  *   retro_host <core.so> <program.exe> <role> <link> <timing> <drc> [frames]
- *     role:   1, 2 or 3, written to 0x80100200 for the program
+ *     role:   1 to 5, written to 0x80100200 for the program
  *     link:   "disabled", "console A", "console B" or "loopback"
  *     timing: "exact" or "fast"
  *     drc:    "enabled" or "disabled" (the interpreter)
@@ -91,7 +91,7 @@ static int16_t input_state(unsigned a, unsigned b, unsigned c, unsigned d)
 }
 
 struct result {
-	uint32_t magic, role, status, count, sum, wrong, errors, pad;
+	uint32_t magic, role, status, count, sum, wrong, errors, sr0;
 	uint16_t rt_poll[64], rt_irq[64];
 };
 
@@ -220,6 +220,8 @@ int main(int argc, char *argv[])
 
 	printf("role %u status %x count %u sum %08x wrong %u errors %u\n",
 		r->role, r->status, r->count, r->sum, r->wrong, r->errors);
+	if (role == 5)
+		printf("alone sr %03x\n", r->sr0);
 	printf("poll");
 	for (i = 0; i < 64; i++)
 		printf(" %u", r->rt_poll[i]);
@@ -231,7 +233,7 @@ int main(int argc, char *argv[])
 		(t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9);
 
 	/* a few more frames so that the other console can finish too */
-	for (i = 0; i < 4 && role != 3; i++) {
+	for (i = 0; i < 4 && role < 3; i++) {
 		retro_run();
 		usleep(20000);
 	}
