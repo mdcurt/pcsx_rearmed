@@ -30,6 +30,7 @@ static struct {
 	u64 time;
 	u32 cycle;	/* psxRegs.cycle that .time belongs to */
 	u32 line_delay;
+	u64 next_stop;	/* when sio1Interrupt() is due */
 	int in_handler;
 	int last_status;
 } sio1;
@@ -51,6 +52,7 @@ static void schedule(u64 when)
 
 	if (when > now)
 		d = when - now > HEARTBEAT ? HEARTBEAT : (u32)(when - now);
+	sio1.next_stop = now + d;
 	set_event(PSXINT_SIO1, d);
 }
 
@@ -61,6 +63,18 @@ static void schedule_alone(void)
 	u64 beat = now64() + HEARTBEAT;
 
 	schedule(next < beat ? next : beat);
+}
+
+/* After a register access without a peer: the model may have something to
+ * do before the stop that is scheduled. That stop is not put off, or a game
+ * that keeps reading the port would never get to look for the other
+ * console. */
+static void schedule_sooner(void)
+{
+	if (!(psxRegs.interrupt & (1u << PSXINT_SIO1)))
+		schedule_alone();
+	else if (sio1p_next_event(&sio1.port) < sio1.next_stop)
+		schedule(sio1p_next_event(&sio1.port));
 }
 
 static int linked(void)
@@ -117,7 +131,7 @@ static void access_end(u64 t)
 	}
 	/* linked, the next stop is on the link's grid and stays there */
 	if (!was_linked || !linked())
-		schedule_alone();
+		schedule_sooner();
 }
 
 unsigned int sio1HwRead8(unsigned int add)
