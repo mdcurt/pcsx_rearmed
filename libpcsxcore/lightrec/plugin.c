@@ -371,6 +371,11 @@ static bool lightrec_can_hw_direct(u32 kaddr, bool is_write, u8 size)
 	    (kaddr & 0xffc0) == 0x1800)
 		return false;
 
+	// link cable port: not memory while it is emulated, which can be
+	// turned on after the code that asks here has been compiled
+	if ((kaddr & 0xfff0) == 0x1050)
+		return false;
+
 	// need write handlers/read-only
 	if ((kaddr & 0xffe0) == 0x1040 ||
 	    (kaddr & 0xfff8) == 0x1070 ||
